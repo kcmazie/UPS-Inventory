@@ -1,7 +1,7 @@
 Param(
-	[switch]$Console = $false,                                                  #--[ Set to true to enable local console result display. Defaults to false ]--
-	[switch]$Debug = $False,                                                    #--[ Generates extra console output for debugging.  Defaults to false ]--
-	[switch]$EnableExcel = $True                                                #--[ Defaults to use Excel. ]--  
+	[switch]$Console = $false,              #--[ Set to true to enable local console result display. Defaults to false ]--
+	[switch]$Debug = $False,                #--[ Generates extra console output for debugging.  Defaults to false ]--
+	[switch]$DisableExcel = $False          #--[ Defaults to use Excel. ]--  
 )
 <#==============================================================================
          File Name : UPS-Inventory.ps1
@@ -17,10 +17,13 @@ Param(
                    : Will generate a new spreadsheet if none exists by using a text file located in the same folder
                    : as the script, one IP per line.  Default operation is to check for text file first, then if not
                    : found check for an existing spreadsheet also in the same folder.  If an existing spreadsheet
-                   : is located the target list is compliled from column A.  It will also copy a master spreadsheet
+                   : is located the target list is compiled from column A.  It will also copy a master spreadsheet
                    : to a working copy that gets processed.  Up to 10 backup copies are retained prior to writing
                    : changes to the working copy.
-	               : 
+	               :
+         Arguments : -console       = Set to $true will display progrees to the terminal
+                   : -debug         = Set to $true to display extra info to the terminal
+                   : -disableeexcel = Set to $True to stop Excel from loading.  Not currently used.
           Warnings : Excel is set to be visible (can be changed) so don't mess with it while the script is running or it can crash.
                    :   
              Legal : Public Domain. Modify and redistribute freely. No rights reserved.
@@ -61,7 +64,7 @@ $TestFileName = "$PSScriptRoot\TestFile.txt"
 #$SNMPv3Secret = < See external config file >
 
 #--[ Runtime tweaks for testing ]--
-$EnableExcel = $True
+#$DisableExcel = $True
 $Console = $True
 $Debug = $false #True
 $CloseOpen = $true
