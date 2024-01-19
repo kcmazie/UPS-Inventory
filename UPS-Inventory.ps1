@@ -1,7 +1,7 @@
 Param(
-	[switch]$Console = $false,              #--[ Set to true to enable local console result display. Defaults to false ]--
-	[switch]$Debug = $False,                #--[ Generates extra console output for debugging.  Defaults to false ]--
-	[switch]$DisableExcel = $False          #--[ Defaults to use Excel. ]--  
+    [switch]$Console = $false,                                                  #--[ Set to true to enable local console result display. Defaults to false ]--
+    [switch]$Debug = $False,                                                    #--[ Generates extra console output for debugging.  Defaults to false ]--
+    [switch]$EnableExcel = $True                                                #--[ Defaults to use Excel. ]--  
 )
 <#==============================================================================
          File Name : UPS-Inventory.ps1
@@ -10,20 +10,17 @@ Param(
        Description : Uses SNMP to poll and track APC UPS devices using MS Excel.
                    : 
              Notes : Normal operation is with no command line options.  Commandline options noted below.
-		           :
+                   :
       Requirements : Requires the PowerShell SNMP library from https://www.powershellgallery.com/packages/SNMPv3
                    : Currently designed to poll APC UPS devices.  UPS NMC must have SNMP v3 active.
                    : Script checks for active SNMPv1, FTP, and SNMPv3.
                    : Will generate a new spreadsheet if none exists by using a text file located in the same folder
                    : as the script, one IP per line.  Default operation is to check for text file first, then if not
                    : found check for an existing spreadsheet also in the same folder.  If an existing spreadsheet
-                   : is located the target list is compiled from column A.  It will also copy a master spreadsheet
+                   : is located the target list is compliled from column A.  It will also copy a master spreadsheet
                    : to a working copy that gets processed.  Up to 10 backup copies are retained prior to writing
                    : changes to the working copy.
-	               :
-         Arguments : -console       = Set to $true will display progrees to the terminal
-                   : -debug         = Set to $true to display extra info to the terminal
-                   : -disableeexcel = Set to $True to stop Excel from loading.  Not currently used.
+                   : 
           Warnings : Excel is set to be visible (can be changed) so don't mess with it while the script is running or it can crash.
                    :   
              Legal : Public Domain. Modify and redistribute freely. No rights reserved.
@@ -37,9 +34,11 @@ Param(
    Version History : v1.0 - 08-16-22 - Original 
     Change History : v2.0 - 09-00-22 - Numerous operational & bug fixes prior to v3.
                    : v3.1 - 09-15-22 - Cleaned up final version for posting.
-                   : v3.2 - 00-00-00 - 
                    : v4.0 - 04-12-23 - Too many changes to list
-				   :                  
+                   : v4.1 - 07-03-23 - Added age and LDOS dates. 
+                   : v5.0 - 01-17-24 - Fixed DNS lookup.  Fixed last test result.  Fixed color coding of hostname for
+                   :                   numerous events.  Added hostname cell comments to describe color coding.
+                   :                  
 ==============================================================================#>
 
 #Requires -version 5
@@ -64,9 +63,9 @@ $TestFileName = "$PSScriptRoot\TestFile.txt"
 #$SNMPv3Secret = < See external config file >
 
 #--[ Runtime tweaks for testing ]--
-#$DisableExcel = $True
+$EnableExcel = $True
 $Console = $True
-$Debug = $false #True
+$Debug = $false #true
 $CloseOpen = $true
 
 #------------------------------------------------------------
@@ -114,51 +113,61 @@ Function LoadConfig {
         [xml]$Configuration = Get-Content "$PSScriptRoot\$ConfigFile"  #--[ Read & Load XML ]--    
         $Script:SourcePath = $Configuration.Settings.General.SourcePath
         $Script:ExcelSourceFile = $Configuration.Settings.General.ExcelSourceFile
+        $Script:DNS = $Configuration.Settings.General.DNS 
         $Script:SMNPv3User = $Configuration.Settings.Credentials.SMNPv3User
         $Script:SMNPv3AltUser = $Configuration.Settings.Credentials.SMNPv3AltUser
         $Script:SNMPv3Secret = $Configuration.Settings.Credentials.SMNPv3Secret
+        $Script:PasswordFile = $Configuration.Settings.Credentials.PasswordFile
+        $Script:KeyFile = $Configuration.Settings.Credentials.KeyFile
     }
 }
 
 Function Write2Excel ($WorkSheet,$Row,$Col,$Data,$Format,$Debug){
     $Existing = $WorkSheet.Cells.Item($Row,$Col).Text                               #--[ Read existing spreadsheet cell data for comparison ]-- 
+#    $Index = $WorkSheet.Cells($Row-2,1).Interior.ColorIndex                         #--[ Determine existing row cell color index ]--
+#    $Anomaly = ""                                                                   #--[ A return flag for doing extra adjustments ]--
+   # sleep -sec .5
+   # write-host $Col -ForegroundColor red
+   # $debug = $true
+
     If ($Debug){
-        write-host "  New Data      :"$Data -ForegroundColor Green
+        write-host "`n  New Data      :"$Data -ForegroundColor Green
         write-host "  Existing Data :"$Existing -ForegroundColor Cyan
     }
     If ($Script:SpreadSheet -eq "New"){                                             #--[ Creating a new spreadsheet, set all cells to black ]--
         $Worksheet.Cells($Row, $Col).Font.Bold = $False
         $Worksheet.Cells($Row, $Col).Font.ColorIndex = 0                            #--[ Black ]--    
-
-    }Else{                                                                          #--[ Using existing spreadsheet. ]--
-        $Index = $WorkSheet.Cells($Row-2,1).Interior.ColorIndex        #--[ Determine existing row cell color index ]--
+    }Else{                                                                          #--[ Using existing spreadsheet. ]--      
         If ($Existing -eq ""){
-            $Worksheet.Cells($Row, $Col).Font.ColorIndex = 0            #--[ Black to denote a new item ]--
+            $Worksheet.Cells($Row, $Col).Font.ColorIndex = 0                        #--[ Black to denote a new item ]--
         }Else{
             Switch ($Format){
                 "existing" {
-                    $Data = $Existing                                           #--[ Never over-write the existing data ]--
+                    $Data = $Existing                                               #--[ Never over-write the existing data ]--
                 }
                 "number" {
                     If ($Existing -gt $Data){
                         $Worksheet.Cells($Row, $Col).Font.Bold = $false
-                        $Worksheet.Cells($Row, $Col).Font.ColorIndex = 10       #--[ Green ]--
+                        $Worksheet.Cells($Row, $Col).Font.ColorIndex = 10           #--[ Green ]--
                     }
                     If ($Data -gt $Existing){
                         $Worksheet.Cells($Row, $Col).Font.Bold = $true
-                        $Worksheet.Cells($Row, $Col).Font.ColorIndex = 3        #--[ Red ]--
+                        $Worksheet.Cells($Row, $Col).Font.ColorIndex = 3            #--[ Red ]--
                     }
                 }
                 "date" {
                     $Worksheet.Cells($Row, $Col).NumberFormat = "mm/dd/yyyy"
                     $Worksheet.Cells($Row, $Col).Font.Bold = $False
-                    $Worksheet.Cells($Row, $Col).Font.ColorIndex = 0            #--[ Black ]--
+                    $Worksheet.Cells($Row, $Col).Font.ColorIndex = 0                #--[ Black ]--
                 }
-                "run" {                                                         #--[ Calculate Batt Runtime and load deltas ]--
+                "run" {                                                             #--[ Calculate Batt Runtime and load deltas ]--
                     If (($Data -like "*NoSuch*") -or ($WorkSheet.Cells.Item($Row,$Col).Text -ne "UPS")){
                         # --[ Do Nothing ]--
                     }Else{
-                        If ($Col -eq 27){                                           #--[ Column 27 is "AA" which should equate to Battery Load % ]--                        
+                        If ($Col -eq 31){  
+                            #--[ NOTE !!! ]--                                         
+                            #--[ Column 31 is "AE" which should equate to Battery Load % ]--                        
+                            #--[ Adjust this if column count is altered ]--
                             $Existing = $Existing.Split(" ")[0]
                             $Delta = $Existing-$Data
                             If ([int]$Data -gt [int]$Existing){                     #--[ Load increase ]--
@@ -170,7 +179,8 @@ Function Write2Excel ($WorkSheet,$Row,$Col,$Data,$Format,$Debug){
                                 $Worksheet.Cells($Row, $Col).Font.ColorIndex = 10   #--[ Green ]--
                                 $Data = $Data+"  (-"+($Delta)+")"
                             }
-                        }Else{                                                      #--[ Otherwise battery runtime (col 24 or "X") gets processed ]--
+                        }Else{                                                      
+                            #--[ If column is NOT 31, then col 28 "AB" gets processed ]--
                             $DeltaH = ([int]$Existing.Split(" ")[0] - [int]$Data.Split(" ")[0])*60   
                             $DeltaM = [int]$Existing.Split(" ")[2] - [int]$Data.Split(" ")[2]
                             $Delta = $DeltaH+$DeltaM                   
@@ -191,7 +201,7 @@ Function Write2Excel ($WorkSheet,$Row,$Col,$Data,$Format,$Debug){
                     }
                 }
                 "mac" {                                                             #--[ Process MAC address(es) ]--
-                    If (($Existing -eq $Obj.AltMAC) -Or ($Existing -eq $Data)){     #--[ Exisitng matches all data ]--
+                    If (($Existing -eq $Obj.RealMAC) -Or ($Existing -eq $Data)){    #--[ Exisitng matches all data ]--
                         $Worksheet.Cells($Row, $Col).Font.Bold = $true
                         $Worksheet.Cells($Row, $Col).Font.ColorIndex = 10           #--[ Flag as bold green. ]--
                         If ($Null -ne $Worksheet.Cells($Row, $Col).Comment()){  
@@ -199,7 +209,7 @@ Function Write2Excel ($WorkSheet,$Row,$Col,$Data,$Format,$Debug){
                         }
                         $Data = $Existing
                     }ElseIf (($Data -like "*:3f:*") -Or ($Existing -like "*:3f:*")){  #--[ 3F in position 3 and/or 6 denotes bad data ]--
-                        If (($Obj.AltMAC -eq "Not Detected") -Or ($Obj.AltMAC -like "*:FF:")){
+                        If (($Obj.RealMAC -eq "Not Detected") -Or ($Obj.RealMAC -like "*:FF:")){
                             $Worksheet.Cells($Row, $Col).Font.Bold = $False
                             $Worksheet.Cells($Row, $Col).Font.ColorIndex = 3        #--[ Red ]--
                             If ($Null -ne $Worksheet.Cells($Row, $Col).Comment()){  #--[ If a previous comment exists, remove it before adding new ]-
@@ -213,9 +223,9 @@ Function Write2Excel ($WorkSheet,$Row,$Col,$Data,$Format,$Debug){
                             If ($Null -ne $Worksheet.Cells($Row, $Col).Comment()){  #--[ If a previous comment exists, remove it before adding new ]-
                                 $Worksheet.Cells($Row, $Col).Comment.Delete()
                             }  
-                            $Data = $Obj.AltMAC
+                            $Data = $Obj.RealMAC
                         }
-                    }Else{                                                          #--[ AN issue exists somewhere ]--
+                    }Else{                                                          #--[ An issue exists somewhere ]--
                         $Worksheet.Cells($Row, $Col).Font.Bold = $False
                         $Worksheet.Cells($Row, $Col).Font.ColorIndex = 3            #--[ Red ]--
                         If ($Null -ne $Worksheet.Cells($Row, $Col).Comment()){      #--[ If a previous comment exists, remove it before adding new ]-
@@ -225,14 +235,14 @@ Function Write2Excel ($WorkSheet,$Row,$Col,$Data,$Format,$Debug){
                         $Data = $Existing
                     }
                 }
+                "url" {  
+                    $WorkSheet.Hyperlinks.Add($WorkSheet.Cells.Item($Row, $Col),$NewData.Split(";")[0],"","",$NewData.Split(";")[1]) | Out-Null
+                }
                 Default {
                     If ($Existing -ne $Data){
-#                        $Worksheet.Cells($Row, $Col).Font.ColorIndex = 0            #--[ Black to denote a new item ]--
-                 #  }Else{
                         $Worksheet.Cells($Row, $Col).Font.Bold = $true
                         $Worksheet.Cells($Row, $Col).Font.ColorIndex = 7            #--[ Violet to denote a change ]--
-                    }Else{   
-                    #If ($Data -eq $Existing){                                                   #--[ New data matches existing data ]--
+                    }Else{                       
                         If ($Format -eq "red"){
                             $Worksheet.Cells($Row, $Col).Font.Bold = $True
                             $Worksheet.Cells($Row, $Col).Font.ColorIndex = 3
@@ -255,12 +265,24 @@ Function Write2Excel ($WorkSheet,$Row,$Col,$Data,$Format,$Debug){
                 }
             }
         }
-
     } 
-    If ($WorkSheet.Cells.Item($Row,9).Text -eq "No Connection"){
-        $WorkSheet.UsedRange.Rows.Item($Row-2).Interior.ColorIndex = 15  #--[ Background set to grey if ping OK but logon fails ]--
-        statusmsg $row "yellow"
-    }   
+
+    #--[ Pre-Write Cleanup ]-------------------------------------------------------------
+
+    If ($Col -eq "2"){   #--[ Color coding for the hostname cell ]--       
+        #--[ This gets processed first so If a previous hostname comment exists, remove it ]-
+        If ($Null -ne $Worksheet.Cells($Row, 2).Comment()){  
+            $Worksheet.Cells($Row, 2).Comment.Delete()
+        }
+        If (($Data -ne $Existing) -or ($Format -eq "Red")){   #--[ Color code red and add a comment to denote nslookup failure ]--
+            $Worksheet.Cells($Row,2).Font.Bold = $True
+            $Worksheet.Cells($Row,2).Font.ColorIndex = 3
+            $Comment = "WARNING: Hostname DNS lookup failed! ( "+$Data+" )"
+            [void]$WorkSheet.cells.Item($Row, 2).AddComment($Comment) 
+        }
+        $Data = $Existing       
+    }
+ 
     If (($Existing -eq "Replace") -or ($Data -eq "Replace")){
         $Worksheet.Cells($Row, $Col).Font.Bold = $True
         $Worksheet.Cells($Row, $Col).Font.ColorIndex = 3
@@ -269,8 +291,67 @@ Function Write2Excel ($WorkSheet,$Row,$Col,$Data,$Format,$Debug){
         $Worksheet.Cells($Row, $Col).Font.Bold = $False
         $Worksheet.Cells($Row, $Col).Font.ColorIndex = 0
     }
-    If ($Debug){write-host "  Writing       :"$Data -ForegroundColor Magenta }
-    $erroractionpreference = "stop" #ilentlycontinue"
+    If (($Data -eq "existing") -or ($Data -eq "")){                         #--[ If no data use existing ]--
+        If ($Existing -eq ""){
+            $Data = ""
+        }Else{
+            $Data = $Existing
+            $Worksheet.Cells($Row, $Col).Font.ColorIndex = 0                #--[ Using existing data, set to black ]--
+            $Worksheet.Cells($Row, $Col).Font.Bold = $False
+        }
+    }
+ 
+    If (($Col -eq "25") -and ($Data -ne "Passed")){                         #--[ Latest self test has failed.  Flag the hostname ]--
+        Switch ($Data) {
+            "Unknown" {
+                $AddComment = "WARNING: Self-Test may not be executing!"
+                $Worksheet.Cells($Row,2).Font.ColorIndex = 45
+            } 
+            "Failed" {
+                $AddComment = "WARNING: Self-Test has failed!"
+                $Worksheet.Cells($Row,2).Font.ColorIndex = 3
+            }
+            Default {
+                $AddComment = "WARNING: Self-Test status is unknown."
+                $Worksheet.Cells($Row,2).Font.ColorIndex = 45
+            } 
+        }
+        If ($Null -ne $Worksheet.Cells($Row, 2).Comment()){ 
+            $Comment = $Worksheet.Cells.item($Row, 2).comment.text()        #--[ Copy the existing comment first ]--   
+            $Worksheet.Cells($Row, 2).Comment.Delete()                      #--[ Clear the existing comment ]--
+            [void]$WorkSheet.cells.Item($Row, 2).AddComment($Comment+"`n`n"+$AddComment)   #--[ Re-add comments ]--
+        }Else{
+            [void]$WorkSheet.cells.Item($Row, 2).AddComment($AddComment)    #--[ Add the new comment only ]--
+        }
+        If ($Comment -like "*DNS*"){
+            $Worksheet.Cells($Row,2).Font.ColorIndex = 3                    #--[ Put the color back if comment was DNS ]--
+        }
+
+    }
+
+    If (($Col -eq "28") -and ($Data -ne "N/A")){                            #--[ Colorize Hostname orange if runtime is under 30 minutes ]--
+        $Hr = $Data.Split(" ")[0]
+        $Min = $Data.Split(" ")[2]
+        If (([Int]$Hr -lt 1) -and ([Int]$Min -lt 30)){
+            $Worksheet.Cells($Row,2).Font.Bold = $True
+            $Worksheet.Cells($Row,2).Font.ColorIndex = 45  
+            $AddComment = "WARNING: Runtime is under 30 minutes!"
+            If ($Null -ne $Worksheet.Cells($Row, 2).Comment()){ 
+                $Comment = $Worksheet.Cells.item($Row, 2).comment.text()        #--[ Copy the existing comment first ]--   
+                $Worksheet.Cells($Row, 2).Comment.Delete()                      #--[ Clear the existing comment ]--
+                [void]$WorkSheet.cells.Item($Row, 2).AddComment($Comment+"`n`n"+$AddComment)   #--[ Re-add comments ]--
+            }Else{
+                [void]$WorkSheet.cells.Item($Row, 2).AddComment($AddComment)    #--[ Add the new comment only ]--
+            }
+            If (($Comment -like "*DNS*") -or ($Comment -like "*Failed*")){
+                $Worksheet.Cells($Row,2).Font.ColorIndex = 3                    #--[ Put the color back if comment was DNS ]--
+            }
+        }
+    }
+
+    #--[ Write processed data to Excel ]--------------------------------------------------
+    If ($Debug){write-host "        Writing :"$Data -ForegroundColor Magenta }
+    $ErrorActionPreference = "stop" 
     Try{
         $WorkSheet.cells.Item($Row, $Col) = $Data
     }Catch{
@@ -280,20 +361,21 @@ Function Write2Excel ($WorkSheet,$Row,$Col,$Data,$Format,$Debug){
         StatusMsg $Msg "Red"
         $Data.GetType()
     }   
+#    Return $Anomaly
 }
 
 Function CallPlink ($IP,$command){
-    $ErrorActionPreference = "silentlycontinue"
+    $ErrorActionPreference = "silentlycontinue"  #--[ Must be set as shown or plink will fail ]--
     $Switch = $False
     $UN = $Env:USERNAME
     $DN = $Env:USERDOMAIN
     $UID = $DN+"\"+$UN
-    If (Test-Path -Path $PasswordFile){
-        $Base64String = (Get-Content $KeyFile)
+    If (Test-Path -Path $Script:PasswordFile){
+        $Base64String = (Get-Content $Script:KeyFile)
         $ByteArray = [System.Convert]::FromBase64String($Base64String)
         $Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $UID, (Get-Content $PasswordFile | ConvertTo-SecureString -Key $ByteArray)
     }Else{
-        $Credential = $Script:ManualCreds
+        $Credential = Get-Credential
     }
     #------------------[ Decrypted Result ]-----------------------------------------
     $Password = $Credential.GetNetworkCredential().Password
@@ -310,7 +392,8 @@ Function CallPlink ($IP,$command){
         #------------------------------------------------------------
         StatusMsg "Plink IP: $IP" "Magenta"
         #$test = @(plink-v73.exe -ssh -no-antispoof -pw $Password $username@$IP $command ) #*>&1)
-        $test = @(plink-v73.exe -ssh -no-antispoof -batch -pw $Password $username@$IP $command *>&1)
+        $test = @(plink-v73.exe -ssh -no-antispoof -batch -pw $Password $Username@$IP $command *>&1)
+
         If ($test -like "*abandoned*"){
             StatusMsg "Switching Plink version" "Magenta"
             $Switch = $true
@@ -321,11 +404,13 @@ Function CallPlink ($IP,$command){
             $Msg = 'Executing Plink v52 (Command = '+$Command+')'
             StatusMsg $Msg 'blue'
             $Result = @(plink-v52.exe -ssh -no-antispoof -batch -pw $Password $username@$IP $command *>&1) 
+            $Result
         }Else{
             $ErrorActionPreference = "continue"
             $Msg = 'Executing Plink v73 (Command = '+$Command+')'
             StatusMsg $Msg 'magenta'
                 $Result = @(plink-v73.exe -ssh -no-antispoof -batch -pw $Password $username@$IP $command *>&1)
+                $Result
         }
         ForEach ($Line in $Result){
             If ($Line -like "*denied*"){
@@ -447,29 +532,40 @@ Function GetMAC ($WorkSheet,$Obj,$Row,$Col,$Debug){
     $Port = $WorkSheet.Cells.Item($Row,7).Text             #/
 
     If ($Port -NotLike "*Gi*"){  #--[ Assuming all the ports are gig ports, check for spelling issues ]--
-        StatusMsg "Switchport ID issue detected... Please check spreadsheet..." "red"
+        StatusMsg "1 Switchport ID issue detected... Please check spreadsheet..." "red"
     }
 
-    $Cmd = "sh mac addr | i "+$Port
-    $SwitchIP = [string](nslookup $Switch 10.40.9.11 2>&1)
-    $SwitchIP = ($SwitchIP.Split(":")[4]).Trim()
-    $SwitchData = CallPlink $SwitchIP $Cmd
+    Try{
+        $Cmd = "sh mac addr | i "+$Port
+        $SwitchIP = [string](nslookup $Switch 10.40.9.11 2>&1)
+        $SwitchIP = ($SwitchIP.Split(":")[4]).Trim()
+        $SwitchData = CallPlink $SwitchIP $Cmd
+    }Catch{
+        $MAC = "Not Detected"
+    }
+
     Try{
         $Found = select-string "([A-Za-z0-9]+(\.[A-Za-z0-9]+)+)" -inputobject $SwitchData -ErrorAction:SilentlyContinue
         $MAC = ((($Found.Matches.groups[0].value) -Replace '\.', '') -replace '..(?!$)', '$&:').ToUpper()
     }catch{
         $MAC = "Not Detected"
     }
+    
     If ($Debug){
-        StatusMsg "Switch name = $switch" "yellow"
-        StatusMsg "Switch IP = $SwitchIP" "yellow"
-        StatusMsg "Switch port = $port" "yellow"
-        StatusMsg "Existing MAC = $existing" "yellow"
-        StatusMsg "Detected MAC = $mac" "cyan"
-        StatusMsg "Line returned from switch: $SwitchData" "green"
+        $Color = "yellow"
+        StatusMsg "Switch name = $switch" $Color
+        StatusMsg "Switch IP = $SwitchIP" $Color
+        StatusMsg "Switch port = $port" $Color
+        StatusMsg "Existing MAC = $existing" $Color
+        StatusMsg "Detected MAC = $mac" $Color
+        StatusMsg "Line returned from switch: $SwitchData" $Color
     }
-
-    Return $MAC
+    
+    $Obj | Add-Member -MemberType NoteProperty -Name "SwitchIP" -Value $SwitchIP
+    $Obj | Add-Member -MemberType NoteProperty -Name "SwitchName" -Value $Switch
+    $Obj | Add-Member -MemberType NoteProperty -Name "SwitchPort" -Value $Port
+    $Obj | Add-Member -MemberType NoteProperty -Name "RealMAC" -Value $MAC
+    Return $Obj
 }
 
 Function OpenExcel ($Excel,$ExcelWorkingCopy,$SheetName,$Console) {
@@ -505,28 +601,32 @@ Function OpenExcel ($Excel,$ExcelWorkingCopy,$SheetName,$Console) {
         $WorkSheet.cells.Item(3,$Col++) = "UPS Serial #"        # Q
         $WorkSheet.cells.Item(3,$Col++) = "UPS Firmware Ver"    # R            
         $WorkSheet.cells.Item(3,$Col++) = "UPS Mfg Date"        # S
-        $WorkSheet.cells.Item(3,$Col++) = "Last Test Date"      # T
-        $WorkSheet.cells.Item(3,$Col++) = "Last Test Result"    # U
-        $WorkSheet.cells.Item(3,$Col++) = "Battery Pack"        # V            
-        $WorkSheet.cells.Item(3,$Col++) = "Last Batt Change"    # W
-        $WorkSheet.cells.Item(3,$Col++) = "Battery Runtime"     # X
-        $WorkSheet.cells.Item(3,$Col++) = "Replace Batt?"       # Y  
-        $WorkSheet.cells.Item(3,$Col++) = "Replace on Date"     # Z  
-        $WorkSheet.cells.Item(3,$Col++) = "Battery Load %"      # AA          
-        $WorkSheet.cells.Item(3,$Col++) = "NMC Model"           # AB
-        $WorkSheet.cells.Item(3,$Col++) = "NMC MAC"             # AC
-        $WorkSheet.cells.Item(3,$Col++) = "NMC Serial #"        # AD           
-        $WorkSheet.cells.Item(3,$Col++) = "NMC Hardware Ver"    # AE
-        $WorkSheet.cells.Item(3,$Col++) = "NMC AOS Ver"         # AF
-        $WorkSheet.cells.Item(3,$Col++) = "NMC AOS Firmware"    # AG
-        $WorkSheet.cells.Item(3,$Col++) = "NMC App Ver"         # AH
-        $WorkSheet.cells.Item(3,$Col++) = "NMC App Firmware"    # AI
-        $WorkSheet.cells.Item(3,$Col++) = "NMC Mfg Date"        # AJ
-        $WorkSheet.cells.Item(3,$Col++) = "Serviced By"         # AK
-        $WorkSheet.cells.Item(3,$Col++) = "Comments"            # AL
-        $WorkSheet.cells.Item(3,$Col++) = "URL"                 # AM
-        $WorkSheet.cells.Item(3,$Col++) = "Date Inspected"      # AN
-        $Range = $WorkSheet.Range(("A3"),("AN3")) 
+        $WorkSheet.cells.Item(3,$Col++) = "Age (Yrs)"           # S
+        $WorkSheet.cells.Item(3,$Col++) = "EOL Date"            # T
+        $WorkSheet.cells.Item(3,$Col++) = "EOS Date"            # U
+        $WorkSheet.cells.Item(3,$Col++) = "LDOS Date"           # V
+        $WorkSheet.cells.Item(3,$Col++) = "Last Test Date"      # W
+        $WorkSheet.cells.Item(3,$Col++) = "Last Test Result"    # X
+        $WorkSheet.cells.Item(3,$Col++) = "Battery Pack"        # Y            
+        $WorkSheet.cells.Item(3,$Col++) = "Last Batt Change"    # Z
+        $WorkSheet.cells.Item(3,$Col++) = "Battery Runtime"     # AA
+        $WorkSheet.cells.Item(3,$Col++) = "Replace Batt?"       # AB  
+        $WorkSheet.cells.Item(3,$Col++) = "Replace on Date"     # AC 
+        $WorkSheet.cells.Item(3,$Col++) = "Battery Load %"      # AD          
+        $WorkSheet.cells.Item(3,$Col++) = "NMC Model"           # AE
+        $WorkSheet.cells.Item(3,$Col++) = "NMC MAC"             # AF
+        $WorkSheet.cells.Item(3,$Col++) = "NMC Serial #"        # AG           
+        $WorkSheet.cells.Item(3,$Col++) = "NMC Hardware Ver"    # AH
+        $WorkSheet.cells.Item(3,$Col++) = "NMC AOS Ver"         # AI
+        $WorkSheet.cells.Item(3,$Col++) = "NMC AOS Firmware"    # AJ
+        $WorkSheet.cells.Item(3,$Col++) = "NMC App Ver"         # AK
+        $WorkSheet.cells.Item(3,$Col++) = "NMC App Firmware"    # AL
+        $WorkSheet.cells.Item(3,$Col++) = "NMC Mfg Date"        # AM
+        $WorkSheet.cells.Item(3,$Col++) = "Serviced By"         # AN
+        $WorkSheet.cells.Item(3,$Col++) = "Comments"            # AO
+        $WorkSheet.cells.Item(3,$Col++) = "URL"                 # AP
+        $WorkSheet.cells.Item(3,$Col++) = "Date Inspected"      # AQ
+        $Range = $WorkSheet.Range(("A3"),("AQ3")) 
         $Range.font.bold = $True
         $Range.HorizontalAlignment = -4108  #Alignment Middle
         $Range.Font.ColorIndex = 44
@@ -542,7 +642,6 @@ Function OpenExcel ($Excel,$ExcelWorkingCopy,$SheetName,$Console) {
     }
     Return $WorkBook
 }
-#--[ End of Functions ]-------------------------------------------------------
 
 Function GetSource ($SourcePath,$ExcelSourceFile,$ExcelWorkingCopy){
     StatusMsg "Excel working copy was not found, copying from source..." "Magenta"
@@ -562,6 +661,8 @@ Function GetSource ($SourcePath,$ExcelSourceFile,$ExcelWorkingCopy){
     }
 }
 
+#--[ End of Functions ]-------------------------------------------------------
+
 $TransferTable = @{
     "1" = "No events"
     "2" = "High line voltage"
@@ -576,6 +677,23 @@ $TransferTable = @{
 }
 
 $OIDArray = @()
+$OIDArray += ,@('LastTestResult','.1.3.6.1.4.1.318.1.1.1.7.2.3.0') #--[ 1=passed, 2=failed, 3=never run ]--
+$OIDArray += ,@('LastTestDate','.1.3.6.1.4.1.318.1.1.1.7.2.4.0')  #--[ returns a date or nothing ]--
+$OIDArray += ,@('UPSSerial','.1.3.6.1.4.1.318.1.1.1.1.2.3.0')
+#$OIDArray += ,@('UPSModelName','.1.3.6.1.4.1.318.1.1.1.1.1.1.0')
+$OIDArray += ,@('UPSModelName','.1.3.6.1.4.1.318.1.4.2.2.1.5.1')
+$OIDArray += ,@('UPSModelNum','.1.3.6.1.4.1.318.1.1.1.1.2.5.0')
+$OIDArray += ,@('UPSMfgDate','.1.3.6.1.4.1.318.1.1.1.1.2.2.0')
+#--[ MfgDate from SN:  xx1915xxxxxx means mfg in 2019, 15th week.  ]--
+$OIDArray += ,@('UPSIDName','.1.3.6.1.2.1.33.1.1.5.0')
+$OIDArray += ,@('FirmwareVer','.1.3.6.1.4.1.318.1.1.1.1.2.1.0')
+$OIDArray += ,@('Mfg','.1.3.6.1.2.1.33.1.1.1.0')
+$OIDArray += ,@('MfgDate','.1.3.6.1.4.1.318.1.1.1.1.2.2.0')
+$OIDArray += ,@('MAC','.1.3.6.1.2.1.2.2.1.6.2')
+$OIDArray += ,@('Location','.1.3.6.1.2.1.1.6.0')
+$OIDArray += ,@('Contact','.1.3.6.1.2.1.1.4.0')       
+$OIDArray += ,@('HostName','.1.3.6.1.2.1.1.5.0')       
+$OIDArray += ,@('NMC','.1.3.6.1.2.1.1.1.0')   
 $OIDArray += ,@('BattFreqOut','.1.3.6.1.4.1.318.1.1.1.4.2.2.0')
 $OIDArray += ,@('BattVOut','.1.3.6.1.4.1.318.1.1.1.4.2.1.0')
 $OIDArray += ,@('BattVIn','.1.3.6.1.4.1.318.1.1.1.3.2.1.0')
@@ -588,6 +706,7 @@ $OIDArray += ,@('BattRunTime','.1.3.6.1.4.1.318.1.1.1.2.2.3.0')
 $OIDArray += ,@('BattReplace','.1.3.6.1.4.1.318.1.1.1.2.2.4.0')
 $OIDArray += ,@('BattReplaceDate','.1.3.6.1.4.1.318.1.1.1.2.2.21.0')
 $OIDArray += ,@('BattSKU','.1.3.6.1.4.1.318.1.1.1.2.2.19.0')
+$OIDArray += ,@('BattExtSKU','.1.3.6.1.4.1.318.1.1.1.2.2.20.0')
 $OIDArray += ,@('BattTemp','.1.3.6.1.4.1.318.1.1.1.2.2.2.0')
 $OIDArray += ,@('ACVIn','.1.3.6.1.4.1.318.1.1.1.3.2.1.0')
 $OIDArray += ,@('ACFreqIn','.1.3.6.1.4.1.318.1.1.1.3.2.4.0')
@@ -595,29 +714,18 @@ $OIDArray += ,@('LastXfer','.1.3.6.1.4.1.318.1.1.1.3.2.5.0')
 $OIDArray += ,@('UPSVOut','.1.3.6.1.4.1.318.1.1.1.4.2.1.0')
 $OIDArray += ,@('UPSFreqOut','.1.3.6.1.4.1.318.1.1.1.4.2.2.0')
 $OIDArray += ,@('UPSOutLoad','.1.3.6.1.4.1.318.1.1.1.4.2.3.0')
-$OIDArray += ,@('UPSOutAmps','.1.3.6.1.4.1.318.1.1.1.4.2.4.0')
-$OIDArray += ,@('LastTestResult','.1.3.6.1.4.1.318.1.1.1.7.2.3.0')
-$OIDArray += ,@('LastTestDate','.1.3.6.1.4.1.318.1.1.1.7.2.4.0')
-$OIDArray += ,@('UPSSerial','.1.3.6.1.4.1.318.1.1.1.1.2.3.0')
-$OIDArray += ,@('UPSModelName','.1.3.6.1.4.1.318.1.1.1.1.1.1.0')
-$OIDArray += ,@('UPSModelNum','.1.3.6.1.4.1.318.1.1.1.1.2.5.0')
-$OIDArray += ,@('UPSIDName','.1.3.6.1.2.1.33.1.1.5.0')
-$OIDArray += ,@('FirmwareVer','.1.3.6.1.4.1.318.1.1.1.1.2.1.0')
-$OIDArray += ,@('Mfg','.1.3.6.1.2.1.33.1.1.1.0')
-$OIDArray += ,@('MfgDate','.1.3.6.1.4.1.318.1.1.1.1.2.2.0')
-$OIDArray += ,@('MAC','.1.3.6.1.2.1.2.2.1.6.2')
-$OIDArray += ,@('Location','.1.3.6.1.2.1.1.6.0')
-$OIDArray += ,@('Contact','.1.3.6.1.2.1.1.4.0')       
-$OIDArray += ,@('HostName','.1.3.6.1.2.1.1.5.0')       
-$OIDArray += ,@('NMC','.1.3.6.1.2.1.1.1.0')       
+$OIDArray += ,@('UPSOutAmps','.1.3.6.1.4.1.318.1.1.1.4.2.4.0')    
 
 $RBCTable = @{
+    #--[ Unfortunately APC does not provide full model numbers via SNMP except on the most very newest ]--
+    #--[ UPS devices.  That makes determining the RBC very hard.  The RBC changes depening on model ]--
+    #--[ options even though the name of the UPS covers multiple models as shown below. ]--
     'SC1500' = 'RBC59'
     'SC420' = 'RBC2'
     'SC750' = 'RBC2'
-    'SMT1500' = 'RBC7'
-    'SMT1500C' = 'RBC7'    
-    'SMT1500RM2U' = 'RBC133'
+    'SMT1500' = 'RBC7'           #--[ also RBC139 and RBC49 ]--
+    'SMT1500C' = 'RBC7'          #--[ also RBC139 and RBC49 ]--
+    'SMT1500RM2U' = 'RBC133'     #--[ Also RBC116 ]--
     'SMT1500RM2UC' = 'RBC159'
     'SMT750C' = 'RBC48'
     'SRT3000RMXLT' = 'RBC152'
@@ -631,6 +739,35 @@ $RBCTable = @{
     'SUA2200RM2U' = 'RBC43'
     'SRT3000RMXL2U' = 'RBC152'
     'SUA5000RMT5U' = 'RBC55'
+    <#--[ Partial list of UPS model #, Name, & RBC ]--
+    SC1500	        Smart-UPS 1500	    RBC59		
+    SC420	        SC420	            RBC2		
+    SC750	        Smart-UPS 750   	RBC2		
+    SMT1500C	    Smart-UPS 1500  	RBC7	RBC139	RBC49
+    SMT1500RM2U	    Smart-UPS 1500	    RBC133	RBC116	
+    SMT1500RM2U	    Smart-UPS 1500 RM	RBC133	RBC116	
+    SMT1500RM2UC	Smart-UPS 1500	    RBC159		
+    SMT1500RM2UC	Smart-UPS 1500	    RBC159		
+    SMT750C	        Smart-UPS 750	    RBC48		
+    SMT750C	        Smart-UPS 750	    RBC48		
+    SRT3000RMXLT	Smart-UPS 2200 RM	RBC152		
+    SRT3000RMXLT	Smart-UPS SRT 3000	RBC152		
+    SU1400R2BX120	Smart-UPS 1400 RM	RBC24		
+    SU1400R2BX135	Smart-UPS 1400 RM	RBC24		
+    SU1400RM2U	    Smart-UPS 1400 RM	RBC24		
+    SU1400RM2U	    Smart-UPS 1400 RM	RBC24		
+    SUA1000	        Smart-UPS 1000	    RBC6		
+    SUA1400RM2U	    Smart-UPS 1400 RM	RBC24		
+    SUA1500 	    Smart-UPS 1500	    RBC7	RBC139	RBC49
+    SUA1500RM2U	    Smart-UPS 1500	    RBC133		
+    SUA1500RM2U	    Smart-UPS 1500 RM	RBC24		
+    SUA2200RM2U	    Smart-UPS 2200 RM	RBC43		
+    SUA2200RM2U	    Smart-UPS 2200 RM	RBC43		
+    SUA3000RM2U	    Smart-UPS 3000 RM	RBC43		
+    SUA5000RMT5U	Smart-UPS 1500 RM	RBC55		
+    SUA5000RMT5U	Smart-UPS 5000	    RBC55		
+    SUM3000RMXL2U	Smart-UPS 3000 XLM	RBC43		
+    #>
 }
 
 
@@ -705,7 +842,7 @@ If (Test-Path -Path $ListFileName){  #--[ If text file exists pull from there. ]
                 If ($WorkSheet.Name -ne "UPS"){
                     $WorkSheet.Delete()
                 }
-            }           
+            }         
         }Else{
             StatusMsg "Existing spreadsheet not found, Source copy failed, Nothing to process.  Exiting... " "red"
             Break;break
@@ -723,6 +860,10 @@ If (Test-Path -Path $ListFileName){  #--[ If text file exists pull from there. ]
     )
 }
 
+$Excel.DisplayAlerts = $false
+$Workbook.SaveAs("$PSScriptRoot\$ExcelWorkingCopy") 
+StatusMsg "Saving workbook" "Magenta"
+
 ForEach ($Target in $IPList){  #--[ Are we pulling from Excel or a text file?  Jagged has row numbers from Excel ]--
     if ($Target.length -eq 2){
         $Jagged = $True
@@ -731,7 +872,7 @@ ForEach ($Target in $IPList){  #--[ Are we pulling from Excel or a text file?  J
     }
 }
 
-#==[ Process items collected in $IPList from spreadsheet or text file as appropriate ]===============================
+#==[ Process items collected in $IPList, from spreadsheet, or text file as appropriate ]===============================
 $Row = 4   
 ForEach ($Target in $IPList){
     If ($Jagged){
@@ -740,11 +881,14 @@ ForEach ($Target in $IPList){
     }
 
     If ($Console){Write-Host "`nCurrent Target  :"$Target"  (Row:"$Row")" -ForegroundColor Yellow }
-    $Excel.ActiveSheet.UsedRange.Rows.Item($Row-1).Interior.ColorIndex = 20  #--[ Sets row color to pale blue to denote which is being worked on ]--
+
+    #--[ Sets row color to pale blue to denote which is being worked on ]--
+    $Excel.ActiveSheet.UsedRange.Rows.Item($Row-1).Interior.ColorIndex = 20  
+    #----------------------------------------------------------------------
+   
     $Obj = New-Object -TypeName psobject   #--[ Collection for Results ]--
-   #
     Try{
-        $HostLookup = (nslookup $Target 10.3.20.45 2>&1) 
+        $HostLookup = (nslookup $Target $Script:DNS 2>&1) 
         $Obj | Add-Member -MemberType NoteProperty -Name "Hostname" -Value ($HostLookup[3].split(":")[1].TrimStart()).Split(".")[0] -force
         $Obj | Add-Member -MemberType NoteProperty -Name "HostnameLookup" -Value $True
     }Catch{
@@ -753,9 +897,9 @@ ForEach ($Target in $IPList){
     }
     
     $Obj | Add-Member -MemberType NoteProperty -Name "IPAddress" -Value $Target -force
-    #--[ Validate and clean up NMC MAC address from polling assigned switch ]--
-    $AltMAC = GetMAC $WorkSheet $Obj $Row $Col $Debug
-    $Obj | Add-Member -MemberType NoteProperty -Name "AltMAC" -Value $AltMAC -force
+    
+    #--[ Validate and clean up NMC MAC address by polling assigned switch ]--
+    $Obj = GetMAC $WorkSheet $Obj $Row $Col $Debug
 
     If (Test-Connection -ComputerName $Target -count 1 -BufferSize 16 -Quiet){  #--[ Ping Test ]--
         $Obj | Add-Member -MemberType NoteProperty -Name "Connection" -Value "Online" -force
@@ -814,7 +958,6 @@ ForEach ($Target in $IPList){
                 $Obj | Add-Member -MemberType NoteProperty -Name "DeviceType" -Value "UPS" -force
             }
 
-
             #--[ Clean Up Results ]-------------------------------------------------
             Switch ($Item[0]) {
                 "MAC"{   #--[ Extract and format MAC Address ]--   
@@ -836,15 +979,22 @@ ForEach ($Target in $IPList){
                             $SaveVal = $Obj.Hostname                         #--[ DNS value is good ]--    
                         }ELse{
                             $SaveVal = $Result.Value.ToString()              #--[ DNS wrong, use SNMP ]--
+                            $Obj | Add-Member -MemberType NoteProperty -Name "HostnameLookup" -Value $False -force
                         }
                     }
                     $Obj | Add-Member -MemberType NoteProperty -Name "HostName" -Value $SaveVal -force
                 } #>
                 "LastTestResult" {   #--[ Extract last test result ]--  
-                    If ($Result.Value -eq 0){
-                        $SaveVal = "Failed"
-                    }Else{
-                        $SaveVal = "Passed"
+                    Switch ($Result.Value){
+                        "1" {
+                            $SaveVal = "Passed"    
+                        }
+                        "2" {
+                            $SaveVal = "Failed"
+                        }
+                        "3" {
+                            $SaveVal = "Unknown"
+                        }
                     }
                     $Obj | Add-Member -MemberType NoteProperty -Name "LastTestResult" -Value $SaveVal -force
                 } #>
@@ -908,20 +1058,24 @@ ForEach ($Target in $IPList){
                             $Obj | Add-Member -MemberType NoteProperty -Name "NMCHardwareVer" -Value $Item.Split(":")[1] -force
                         }
                         If ($Item -like "PF:*"){        #--[ AOS Version ]--
-                            $String = ($Item.Split(":")[1]).Substring(0,($Item.Split(":")[1]).Length-1)
+                            #$String = ($Item.Split(":")[1]).Substring(0,($Item.Split(":")[1]).Length-1)                           
                             $Obj | Add-Member -MemberType NoteProperty -Name "NMCAOSVer" -Value $Item.Split(":")[1] -force
+                            #$Obj | Add-Member -MemberType NoteProperty -Name "NMCAOSVer" -Value $String -force
                         }
                         If ($Item -like "AF1:*"){       #--[ Application Version ]--
-                            $String = ($Item.Split(":")[1]).Substring(0,($Item.Split(":")[1]).Length-1)
+                            #$String = ($Item.Split(":")[1]).Substring(0,($Item.Split(":")[1]).Length-1)
                             $Obj | Add-Member -MemberType NoteProperty -Name "NMCAppVer" -Value $Item.Split(":")[1] -force
+                            #$Obj | Add-Member -MemberType NoteProperty -Name "NMCAppVer" -Value $String -force
                         }
                         If ($Item -like "PN:*"){        #--[ AOS Firmware File Version ]--
-                            $String = ($Item.Split(":")[1]).Substring(0,($Item.Split(":")[1]).Length-1)
+                            #$String = ($Item.Split(":")[1]).Substring(0,($Item.Split(":")[1]).Length-1)
                             $Obj | Add-Member -MemberType NoteProperty -Name "NMCAOSFirmware" -Value $Item.Split(":")[1] -force
+                            #$Obj | Add-Member -MemberType NoteProperty -Name "NMCAOSFirmware" -Value $String -force
                         }
                         If ($Item -like "AN1:*"){       #--[ Application Firmware File Version ]--
-                            $String = ($Item.Split(":")[1]).Substring(0,($Item.Split(":")[1]).Length-1)
+                            #$String = ($Item.Split(":")[1]).Substring(0,($Item.Split(":")[1]).Length-1)
                             $Obj | Add-Member -MemberType NoteProperty -Name "NMCAppFirmware" -Value $Item.Split(":")[1] -force
+                            #$Obj | Add-Member -MemberType NoteProperty -Name "NMCAppFirmware" -Value $String -force
                         }
                         If ($Item -like "SN:*"){$Flag = $True}
                     }
@@ -956,22 +1110,29 @@ ForEach ($Target in $IPList){
                             $SaveVal = $SaveVal.Substring(3)
                         }
                     }
+                    If ($SaveVal -like "*nosuch*"){
+                        $SaveVal = ""
+                    }
                     $Obj | Add-Member -MemberType NoteProperty -Name "BattSKU" -Value $SaveVal.ToString() -force
                 }
                 Default {   #--[ Use values pulled from SNMP for all others ]--
-                    If (($Result.Value -eq "") -or ($Result.Value -eq $Null)){
-                        $SaveVal = " "
+                    If (($Result.Value -eq "") -or ($Null -eq $Result.Value)){
+                        $SaveVal = "existing"
                     }Else{
                         $SaveVal = $Result.Value.ToString()
                     }
                     If ($SaveVal -like "NoSuch*"){
                         $SaveVal = ""
                     }ElseIf ($Item -like "*date*"){    #--[ Set dates to a uniform format ]--
-                        Try {
-                            $SaveVal = Get-Date $Result.Value.ToString() -Format MM/dd/yyyy -ErrorAction SilentlyContinue
-                        }Catch{ 
-                            $SaveVal = $Result.Value.ToString()                   
-                        }   
+                        If ($SaveVal -eq ""){
+                            $SaveVal = "existing"
+                        }Else{
+                            Try {
+                                $SaveVal = Get-Date $Result.Value.ToString() -Format MM/dd/yyyy -ErrorAction SilentlyContinue
+                            }Catch{ 
+                                $SaveVal = $Result.Value.ToString()                   
+                            }   
+                        }
                     }
                     $Obj | Add-Member -MemberType NoteProperty -Name $Item[0] -Value $SaveVal -force
                 }   #>         
@@ -980,8 +1141,34 @@ ForEach ($Target in $IPList){
             #--[ Adjustments ]------------------------
             If (($Obj.UPSModelName -like "*Smart-UPS*") -or ($Obj.UPSModelName -like "*Symmetra*")){   #-[ Since most don't respond with Mod # & Mfg, fake it ]--
                 $Obj | Add-Member -MemberType NoteProperty -Name "Mfg" -Value "APC" -force
-            }
+            }            
         }
+
+        #--[ Support Dates ]-------------------------------------------
+        #--[ Per the APC web site "APC product warranties are based on a fixed period of time starting from the purchase ]--
+        #--[ date of the unit. If proof of purchase cannot be obtained, the warranty duration is calculated from the     ]--
+        #--[ manufacture date of the unit. As multiple factors go into determining the validity of a warranty, you must  ]--
+        #--[ speak with APC Customer Care Center to obtain the most accurate information.  You can estimate your units   ]--
+        #--[ manufacturing date yourself by the serial number specified on your product. The third and fourth digits     ]--
+        #--[ indicate the year your unit was manufactured, while the following 2 characters are the week your unit was   ]--
+        #--[ manufactured."                                                                                              ]--
+        #--[ This basically means nothing.  So, dates are "assumed" here, EOS=unknown, EOL = Mfg+5, and LDOS=Mfg+10      ]--
+        #--[ unless it's been predetermined and added to the spreadsheet.                                                ]--
+
+        #--[ Get UPS Age by MFG Date ]--
+ 
+        If ($Obj.UPSMfgDate -eq ""){
+            $Obj | Add-Member -MemberType NoteProperty -Name "UPSAge" -Value "existing" -force
+        }Else{
+            $MfgYear = $Obj.UPSSerial.Substring(2,3)
+            $MfgWeek = $Obj.UPSSerial.Substring(4,2)
+            $Obj | Add-Member -MemberType NoteProperty -Name "UPSAge" -Value ([int]((New-TimeSpan -Start ([datetime]$Obj.UPSMfgDate) -End $Today).days/365)) -force         
+        } 
+
+        $Obj | Add-Member -MemberType NoteProperty -Name "EOLDate" -Value "existing" -force
+        $Obj | Add-Member -MemberType NoteProperty -Name "EOSDate" -Value "existing" -force
+        $Obj | Add-Member -MemberType NoteProperty -Name "LDOSDate" -Value "existing" -force
+
     }
 
     If ($Console){
@@ -989,66 +1176,83 @@ ForEach ($Target in $IPList){
         $Obj
     }    
 
+    #--[ Write each column's data for current row ]--
     StatusMsg "Writing Data to Excel... " "Magenta"
     $Col=1
-    $WorkSheet.cells.Item($Row, 1) = $Obj.IPAddress                     # A
+    $WorkSheet.cells.Item($Row,($Col++)) = $Obj.IPAddress                     # A
     If ($Obj.HostNameLookup){
-        Write2Excel $WorkSheet $Row 2 $Obj.HostName "green"             # B  #--[ Apply green emphasis if nslookup succeeds ]-- 
+        Write2Excel $WorkSheet $Row ($Col++) $Obj.HostName "green"             # B  #--[ Apply green emphasis if nslookup succeeds ]-- 
     }Else{
-        Write2Excel $WorkSheet $Row 2 $Obj.HostName "red"               # B  #--[ Apply red emphasis if nslookup fails ]--            
+        Write2Excel $WorkSheet $Row ($Col++) $Obj.HostName "red"               # B  #--[ Apply red emphasis if nslookup fails ]--            
     }
     If ($Obj.Connection -eq "Online"){       
         Write2Excel $WorkSheet $Row 9 $Obj.Connection "green"           # I  #--[ Apply green emphasis if target is online ]--
         If ($Obj.SNMPv3 -ne "False"){   
-            Write2Excel $WorkSheet $Row 3 $Obj.Facility                 # C    
-            Write2Excel $WorkSheet $Row 4 $Obj.IDF                      # D
-            Write2Excel $WorkSheet $Row 5 $Obj.Location                 # E    
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.Facility                 # C    
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.IDF                      # D
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.Location                 # E    
               #--[ Skip the next cell ]--
+              $Col++
             #$WorkSheet.cells.Item($Row, $Col++) = "Switch"             # F    
               #--[ Skip the next cell ]--
+              $Col++
             #$WorkSheet.cells.Item($Row, $Col++) = "Switch Port"        # G
               #--[ Skip the next cell ]--
+              $Col++
             #$WorkSheet.cells.Item($Row, $Col++) = "VLAN"               # H
               #--[ Skip the next cell.  This one was set above. ]--
+              $Col++
             #$WorkSheet.cells.Item($Row, $Col++) = "Online"             # I
             If ($Obj.FTP -eq "False"){
-                Write2Excel $WorkSheet $Row 10 $Obj.FTP "red"           # J  #--[ Apply red emphasis if FTP is not enabled ]--
+                Write2Excel $WorkSheet $Row ($Col++) $Obj.FTP "red"           # J  #--[ Apply red emphasis if FTP is not enabled ]--
             }Else{
-                Write2Excel $WorkSheet $Row 10 $Obj.FTP "green"         # J
+                Write2Excel $WorkSheet $Row ($Col++) $Obj.FTP "green"         # J (Col 10)
             }
-            Write2Excel $WorkSheet $Row 11 $Obj.SNMPv1                  # K  #--[ Apply green emphasis if SMNPv3 is enabled ]--
-            Write2Excel $WorkSheet $Row 12 $Obj.SNMPv3 "green"          # L
-            Write2Excel $WorkSheet $Row 13 $Obj.Mfg                     # M  
-            Write2Excel $WorkSheet $Row 14 $Obj.DeviceType              # N   
-            Write2Excel $WorkSheet $Row 15 $Obj.UPSModelNum "existing"  # O
-            Write2Excel $WorkSheet $Row 16 $Obj.UPSModelName            # P
-            Write2Excel $WorkSheet $Row 17 $Obj.UPSSerial               # Q
-            Write2Excel $WorkSheet $Row 18 $Obj.FirmwareVer             # R
-            Write2Excel $WorkSheet $Row 19 $Obj.MfgDate "date"          # S
-            Write2Excel $WorkSheet $Row 20 $Obj.LastTestDate "date"     # T
-            Write2Excel $WorkSheet $Row 21 $Obj.LastTestResult          # U
-            Write2Excel $WorkSheet $Row 22 $Obj.BattSKU "existing"      # V    
-            Write2Excel $WorkSheet $Row 23 $Obj.BattChangedDate "date"  # W
-            Write2Excel $WorkSheet $Row 24 $Obj.BattRunTime "run"       # X  #--[ Edit write function if this column # changes ]--
-            Write2Excel $WorkSheet $Row 25 $Obj.BattReplace             # Y
-            Write2Excel $WorkSheet $Row 26 $Obj.BattReplaceDate "date"  # Z  #--[ Edit write function if this column # changes ]--
-            Write2Excel $WorkSheet $Row 27 $Obj.UPSOutLoad "run"        # AA    
-            Write2Excel $WorkSheet $Row 28 $Obj.NMCModelNum             # AB
-            Write2Excel $WorkSheet $Row 29 $Obj.MAC "mac"               # AC
-            Write2Excel $WorkSheet $Row 30 $Obj.NMCSerial               # AD
-            Write2Excel $WorkSheet $Row 31 $Obj.NMCHardwareVer          # AE
-            Write2Excel $WorkSheet $Row 32 $Obj.NMCAOSVer               # AF
-            Write2Excel $WorkSheet $Row 33 $Obj.NMCAOSFirmware          # AG
-            Write2Excel $WorkSheet $Row 34 $Obj.NMCAppVer               # AH
-            Write2Excel $WorkSheet $Row 35 $Obj.NMCAppFirmware          # AI
-            Write2Excel $WorkSheet $Row 36 $Obj.NMCMfgDate "date"       # AJ
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.SNMPv1                  # K  #--[ Apply green emphasis if SMNPv3 is enabled ]--
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.SNMPv3 "green"          # L
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.Mfg                     # M  
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.DeviceType              # N   
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.UPSModelNum "existing"  # O (Col 15)
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.UPSModelName            # P
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.UPSSerial               # Q
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.FirmwareVer             # R
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.MfgDate "date"          # S
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.UPSAge                  # T (Col 20)
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.EOLDate "date"          # U
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.EOSDate "date"          # V
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.LDOSDate "date"         # W
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.LastTestDate "date"     # X
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.LastTestResult          # Y (Col 25)  #--[ Edit write function if this column # changes ]--
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.BattSKU "existing"      # Z   #--[ Edit write function if this column # changes ]-- 
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.BattChangedDate "date"  # AA 
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.BattRunTime "run"       # AB  #--[ Edit write function if this column # changes ]--
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.BattReplace             # AC
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.BattReplaceDate "date"  # AD  #--[ Edit write function if this column # changes ]--
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.UPSOutLoad "run"        # AE (Col 31)    
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.NMCModelNum             # AF
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.MAC "mac"               # AG
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.NMCSerial               # AH
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.NMCHardwareVer          # AI (Col 35)
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.NMCAOSVer               # AJ
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.NMCAOSFirmware          # AK
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.NMCAppVer               # AL
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.NMCAppFirmware          # AM
+            Write2Excel $WorkSheet $Row ($Col++) $Obj.NMCMfgDate "date"       # AN (Col 40)
               #--[ Skip the next cell ]--
-            #Write2Excel $WorkSheet $Row 37 "Serviced By"               # AK
+            #Write2Excel $WorkSheet $Row 37 "Serviced By"               # AO
+            $Col++
               #--[ Skip the next cell ]--
-            #Write2Excel $WorkSheet $Row 38 "Comments"                  # AL
+            #Write2Excel $WorkSheet $Row 38 "Comments"                  # AP
+            $Col++
               #--[ Skip the next cell ]--
-            #Write2Excel $WorkSheet $Row 39 "URL"                       # AM    
-            Write2Excel $WorkSheet $Row 40 $Today "date"                # AN
+            #Write2Excel $WorkSheet $Row 39 "URL"                       # AQ    
+            $Col++
+            Write2Excel $WorkSheet $Row $Col $Today "date"                # AR (Col 44)
+
+            $ObjCount = ($Obj|Get-Member -Type NoteProperty).count
+            statusmsg "$ObjCount data points contained in library." "red"            
+            statusmsg "$col columns written" "Magenta"  
+
         }Else{
             StatusMsg "   --- No SNMPv3 ---" "Red"
             $Col = 10
@@ -1067,6 +1271,9 @@ ForEach ($Target in $IPList){
         $Worksheet.Cells($Row, 9).Font.ColorIndex = 3
         $Worksheet.Cells($Row, 9).Font.Bold = $true
         $WorkSheet.Cells.Item($Row, 9) = "No Connection"
+        #--[ Set row interior color as grey if device is OFFLINE prior to moving to next device ]-----
+        $WorkSheet.UsedRange.Rows.Item($Row-1).Interior.ColorIndex = 15
+    #---------------------------------------------------------------------------------------------
     }  
 
     #$RGB_Low = 226 + (239 * 256) + (219 * 256 * 256 )      #--[ Light Green ]--
@@ -1074,15 +1281,17 @@ ForEach ($Target in $IPList){
     #$RGB_Medium = 245 + (219 * 256) + (151 * 256 * 256);
     #$RGB_High = 242 + (142 * 256) + (142 * 256 * 256);
 
-    $Range = $WorkSheet.Range(("A$Row"),("AN$Row"))
+    $Range = $WorkSheet.Range(("A$Row"),("AR$Row"))
     $Range.HorizontalAlignment = -4131
     1..4 | ForEach {
         $Range.Borders.Item($_).LineStyle = 1
         $Range.Borders.Item($_).Weight = 2
     }
+    #--[ Set row interior color as green if device is online prior to moving to next device ]-----
     If ($Obj.Connection -eq "Online"){
         $WorkSheet.UsedRange.Rows.Item($Row-1).Interior.ColorIndex = 35
     }
+    #---------------------------------------------------------------------------------------------
     $Resize = $WorkSheet.UsedRange
     [Void]$Resize.EntireColumn.AutoFit() 
     $Row++          
@@ -1115,9 +1324,10 @@ Write-Host `n"--- COMPLETED ---" -ForegroundColor red
     <General>
         <SourcePath>'C:\Users\Bob\Documents'</SourcePath>
         <ExcelSourceFile>Device-Master-Inventory.xlsx</ExcelSourceFile>
+        <DNS>10.10.10.10</DNS>
     </General>
     <Credentials>
-	<SMNPv3User>snmpuser</SMNPv3User>
+    <SMNPv3User>snmpuser</SMNPv3User>
         <SMNPv3AltUser>SNMPUser2</SMNPv3AltUser>
         <SNMPv3Secret>SnMpv3Community/SNMPv3Secret>
     </Credentials>
