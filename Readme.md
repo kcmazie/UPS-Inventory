@@ -1,3 +1,5 @@
+<body style="background-color: #FF474C;">
+
 [![Minimum Supported PowerShell Version][powershell-minimum]][powershell-github]&nbsp;&nbsp;
 [![GPLv3 license](https://img.shields.io/badge/License-GPLv3-blue.svg)](http://perso.crans.org/besson/LICENSE.html)&nbsp;&nbsp;
 [![made-with-VSCode](https://img.shields.io/badge/Made%20with-VSCode-1f425f.svg)](https://code.visualstudio.com/)&nbsp;&nbsp;
@@ -10,6 +12,7 @@
 
 #### $${\color{orange}Original \space Author \space : \space \color{white}Kenneth \space C. \space Mazie \space \color{lightblue}(kcmjr \space AT \space kcmjr.com)}$$
 
+<!-- >[!note] -->
 ## $${\color{grey}Description:}$$ 
 This script uses SNMP to poll and track APC UPS devices on an MS Excel spreadsheet.  Currently designed to poll APC UPS devices.
 UPS NMC must have SNMP v3 active.  Script checks for active SNMPv1, FTP, and SNMPv3.   Will generate a new spreadsheet if none
@@ -18,12 +21,15 @@ file first, then if not found check for an existing spreadsheet also in the same
 located the target list is compliled from column A.  It will also copy a master spreadsheet to a working copy that gets processed.
 Up to 10 backup copies are retained prior to writing changes to the working copy.
 
-## $${\color{grey}Notes:}$$ 
+<!-- >[!tip] -->
+### $${\color{grey}Arguments:}$$ 
 Normal operation is with no command line options.  
 
+<!-- >[!important] -->
 ### $${\color{grey}Requirements:}$$ 
 Requires the PowerShell SNMP library from https://www.powershellgallery.com/packages/SNMPv3
                
+<!-- >[!warning] -->
 ### $${\color{grey}Warnings:}$$ 
 Excel is set to be visible (can be changed) so don't mess with it while the script is running or it can crash.
 
@@ -36,7 +42,7 @@ That being said, please let me know if you find bugs, have improved the script, 
 ### $${\color{grey}Credits:}$$ 
 Code snippets and/or ideas came from many sources including but not limited to the following:
 
-### $${\color{grey}Version \\& Change History:}$$ 
+### $${\color{grey}Version \space \\& \space Change \space History:}$$ 
 * Last Update by  : Kenneth C. Mazie 
 * Initial Release : v1.0 - 08-16-22 - Original 
 *  Change History :
@@ -46,3 +52,4 @@ Code snippets and/or ideas came from many sources including but not limited to t
 *  v4.1 - 07-03-23 - Added age and LDOS dates. 
 *  v5.0 - 01-17-24 - Fixed DNS lookup.  Fixed last test result.  Fixed color coding of hostname for numerous events.  Added hostname cell comments to describe color coding.
         
+</body>
